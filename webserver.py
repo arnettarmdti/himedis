@@ -11,7 +11,7 @@ FIREBASE_AUTH_KEY = 'baQrBRO8FzJfrWDVyVojeQFzCdjf8xJNpbgrw3y2'  # Ganti dengan k
 
 # Load the XGBoost model
 model = xgb.XGBRegressor()
-model.load_model('xgboost_model3.pkl')  # Sesuaikan jika model Anda berbeda
+model.load_model('xgboost_model3.pkl')  # atau 'xgboost_model3.json'
 
 # Function to make predictions
 def predict(ir_value, red_value):

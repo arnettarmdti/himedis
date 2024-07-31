@@ -1,68 +1,68 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
 import xgboost as xgb
-import requests
+import numpy as np
+import joblib
+import firebase_admin
+from firebase_admin import credentials, db
 import json
+import time
 
-# Firebase configuration
-FIREBASE_URL = 'https://himedis.firebaseio.com/'
-FIREBASE_AUTH_KEY = 'baQrBRO8FzJfrWDVyVojeQFzCdjf8xJNpbgrw3y2'  # Ganti dengan kunci auth Firebase Anda
+# Memuat model XGBoost yang sudah dilatih
+model = joblib.load('xgboost_model3.pkl')
 
-# Load the XGBoost model
-model = xgb.XGBRegressor()
-model.load_model('xgboost_model3.pkl')  # atau 'xgboost_model3.json'
+# Mengonfigurasi Firebase
+firebase_creds = {
+    "type": st.secrets["firebase"]["type"],
+    "project_id": st.secrets["firebase"]["project_id"],
+    "private_key_id": st.secrets["firebase"]["private_key_id"],
+    "private_key": st.secrets["firebase"]["private_key"].replace('\\n', '\n'),
+    "client_email": st.secrets["firebase"]["client_email"],
+    "client_id": st.secrets["firebase"]["client_id"],
+    "auth_uri": st.secrets["firebase"]["auth_uri"],
+    "token_uri": st.secrets["firebase"]["token_uri"],
+    "auth_provider_x509_cert_url": st.secrets["firebase"]["auth_provider_x509_cert_url"],
+    "client_x509_cert_url": st.secrets["firebase"]["client_x509_cert_url"]
+}
 
-# Function to make predictions
-def predict(ir_value, red_value):
-    input_data = np.array([[ir_value, red_value]])
-    prediction = model.predict(input_data)
-    return prediction[0]
+if not firebase_admin._apps:
+    cred = credentials.Certificate(firebase_creds)
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': 'https://himedis-default-rtdb.firebaseio.com/'
+    })
 
-# Function to send data to a new path in Firebase
-def send_to_firebase(data, path):
-    url = FIREBASE_URL + path + '.json?auth=' + FIREBASE_AUTH_KEY
-    headers = {'Content-Type': 'application/json'}
-    response = requests.post(url, headers=headers, data=json.dumps(data))
-    if response.status_code == 200:
-        st.success("Data sent to Firebase successfully!")
-    else:
-        st.error("Failed to send data to Firebase.")
+# Mengakses Realtime Database
+ref = db.reference('/dataSensor')
 
-# Function to fetch data from Firebase
-def fetch_from_firebase(path):
-    url = FIREBASE_URL + path + '.json?auth=' + FIREBASE_AUTH_KEY
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        st.error("Failed to fetch data from Firebase.")
-        return {}
+# Fungsi prediksi
+def predict(sensor_value_ir, sensor_value_red):
+    features = np.array([sensor_value_ir, sensor_value_red]).reshape(1, -1)
+    prediction = model.predict(features)[0]
+    return float(prediction)
 
-# Streamlit app
-def main():
-    st.title("Sensor Data Prediction")
+# Fungsi untuk membaca data dari Firebase, memprosesnya, dan mengirimkan hasilnya
+def process_data():
+    while True:
+        # Membaca data terbaru dari Firebase
+        snapshot = ref.order_by_key().limit_to_last(1).get()
+        if snapshot:
+            for key, data in snapshot.items():
+                sensor_value_ir = data.get('sensor_value_ir')
+                sensor_value_red = data.get('sensor_value_red')
 
-    # Fetch data from Firebase
-    data = fetch_from_firebase('dataSensor')
+                if sensor_value_ir is not None and sensor_value_red is not None:
+                    prediction = predict(sensor_value_ir, sensor_value_red)
+                    result = {
+                        'sensor_value_ir': sensor_value_ir,
+                        'sensor_value_red': sensor_value_red,
+                        'prediction': prediction
+                    }
+                    # Mengirimkan hasil prediksi ke Firebase
+                    ref.child(key).update({'prediction': prediction})
+                    print(f"Processed data: {result}")
+                else:
+                    print("Invalid data format")
 
-    if data:
-        # Process each item in the data
-        for key, value in data.items():
-            ir_value = value.get('irValue', 0)
-            red_value = value.get('redValue', 0)
-            prediction = predict(ir_value, red_value)
-
-            st.write(f"IR Value: {ir_value}, Red Value: {red_value}")
-            st.write(f"Prediction: {prediction}")
-
-            # Send processed data to a new path in Firebase
-            result_data = {
-                "irValue": ir_value,
-                "redValue": red_value,
-                "prediction": prediction
-            }
-            send_to_firebase(result_data, 'processedData/' + key)
+        # Tunggu sebelum memeriksa data lagi
+        time.sleep(10)
 
 if __name__ == "__main__":
-    main()
+    process_data()
